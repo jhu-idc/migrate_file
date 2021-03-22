@@ -54,6 +54,8 @@ use GuzzleHttp\Exception\ServerException;
  * - id_only: (optional) Boolean, if TRUE, the process will return just the id
  *   instead of a entity reference array. Useful if you want to manage other
  *   sub-fields in your migration (see example below).
+ * - mimetype: (optional) The name of the property that contains the name of the file being imported
+ * - filemime: (optional) The name of the property that contains the mime type of the file being imported
  *
  * The destination and uid configuration fields support copying destination
  * values. These are indicated by a starting @ sign. Values using @ must be
