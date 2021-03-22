@@ -1,5 +1,5 @@
 {
-  "name": "drupal/migrate_file",
+  "name": "jhu-idc/migrate_file",
   "type": "drupal-module",
   "description": "Additional support for migrating files including downloading remote files and using remote uris (without download)",
   "keywords": ["Drupal"],
