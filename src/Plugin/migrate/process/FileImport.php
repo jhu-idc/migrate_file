@@ -54,6 +54,8 @@ use GuzzleHttp\Exception\ServerException;
  * - id_only: (optional) Boolean, if TRUE, the process will return just the id
  *   instead of a entity reference array. Useful if you want to manage other
  *   sub-fields in your migration (see example below).
+ * - mimetype: (optional) The name of the property that contains the name of the file being imported
+ * - filemime: (optional) The name of the property that contains the mime type of the file being imported
  *
  * The destination and uid configuration fields support copying destination
  * values. These are indicated by a starting @ sign. Values using @ must be
@@ -238,12 +240,34 @@ class FileImport extends FileCopy {
     }
 
     if ($final_destination) {
-      // Create a file entity.
-      $file = File::create([
-        'uri' => $final_destination,
-        'uid' => $uid,
-        'status' => FILE_STATUS_PERMANENT,
-      ]);
+        // Properties of the File entity being created
+        $file_props = [
+            'uri' => $final_destination,
+            'uid' => $uid,
+            'status' => FILE_STATUS_PERMANENT
+        ];
+
+        // If a configuration key named 'mimetype' exists, use the value of that key as the *source* for retrieving
+        // the file's mimetype.  Allows for another process plugin to set the mime type of the File entity being
+        // created.
+        if ($this->configuration["mimetype"]) {
+            $source_mime_property = $this->configuration["mimetype"];
+            if ($row->get($source_mime_property)) {
+                $file_props["filemime"] = $row->get($source_mime_property);
+            }
+        }
+
+        // If a configuration key named 'filename' exists, use the value of that key as the *source* for retrieving the
+        // file's name.  Allows for another process plugin to set the filename of the File entity being created.
+        if ($this->configuration["filename"]) {
+            $source_filename_property = $this->configuration["filename"];
+            if ($row->get("$source_filename_property")) {
+                $file_props["filename"] = $row->get("$source_filename_property");
+            }
+        }
+
+        // Create a file entity.
+        $file = File::create($file_props);
       $file->save();
       return $id_only ? $file->id() : ['target_id' => $file->id()];
     }
