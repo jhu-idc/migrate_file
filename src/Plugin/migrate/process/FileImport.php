@@ -191,15 +191,15 @@ class FileImport extends FileCopy {
 
     // Build the destination file uri (in case only a directory was provided).
     $destination = $this->getDestinationFilePath($source, $destination);
-    if (!$this->fileSystem->uriScheme($destination)) {
+    if (!$this->streamWrapperManager->getScheme($destination)) {
       if (empty($destination)) {
-        $destination = file_default_scheme() . '://' . preg_replace('/^\//' ,'', $destination);
+        $destination = \Drupal::config('system.file')->get('default_scheme') . '://' . preg_replace('/^\//' ,'', $destination);
       }
     }
     $final_destination = '';
 
     // If we're in re-use mode, reuse the file if it exists.
-    if ($this->getOverwriteMode() == FILE_EXISTS_ERROR && $this->isLocalUri($destination) && is_file($destination)) {
+    if ($this->getOverwriteMode() == FileSystemInterface::FILE_EXISTS_ERROR && $this->isLocalUri($destination) && is_file($destination)) {
       // Look for a file entity with the destination uri.
       if ($files = \Drupal::entityTypeManager()->getStorage('file')->loadByProperties(['uri' => $destination])) {
         // Grab the first file entity with a matching uri.
@@ -312,13 +312,13 @@ class FileImport extends FileCopy {
    */
   protected function getOverwriteMode() {
     if (!empty($this->configuration['rename'])) {
-      return FILE_EXISTS_RENAME;
+      return FileSystemInterface::FILE_EXISTS_RENAME;
     }
     if (!empty($this->configuration['reuse'])) {
-      return FILE_EXISTS_ERROR;
+      return FileSystemInterface::FILE_EXISTS_ERROR;
     }
 
-    return FILE_EXISTS_REPLACE;
+    return FileSystemInterface::FILE_EXISTS_REPLACE;
   }
 
   /**
@@ -349,7 +349,7 @@ class FileImport extends FileCopy {
   protected function getDestinationFilePath($source, $destination) {
     if ($this->isDirectory($destination)) {
       $parsed_url = parse_url($source);
-      $filepath = $destination . drupal_basename($parsed_url['path']);
+      $filepath = $destination . $this->fileSystem->basename($parsed_url['path']);
     }
     else {
       $filepath = $destination;

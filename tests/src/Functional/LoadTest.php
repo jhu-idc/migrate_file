@@ -27,6 +27,13 @@ class LoadTest extends BrowserTestBase {
   protected $user;
 
   /**
+   * Required for Drupal 9 compatibility.
+   *
+   * @var string
+   */
+  protected $defaultTheme = 'stark';
+
+  /**
    * {@inheritdoc}
    */
   protected function setUp() {
