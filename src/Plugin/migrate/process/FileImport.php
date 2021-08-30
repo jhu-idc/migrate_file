@@ -199,7 +199,7 @@ class FileImport extends FileCopy {
     $final_destination = '';
 
     // If we're in re-use mode, reuse the file if it exists.
-    if ($this->getOverwriteMode() == FileSystemInterface::FILE_EXISTS_ERROR && $this->isLocalUri($destination) && is_file($destination)) {
+    if ($this->getOverwriteMode() == FileSystemInterface::EXISTS_ERROR && $this->isLocalUri($destination) && is_file($destination)) {
       // Look for a file entity with the destination uri.
       if ($files = \Drupal::entityTypeManager()->getStorage('file')->loadByProperties(['uri' => $destination])) {
         // Grab the first file entity with a matching uri.
@@ -244,7 +244,7 @@ class FileImport extends FileCopy {
         $file_props = [
             'uri' => $final_destination,
             'uid' => $uid,
-            'status' => FILE_STATUS_PERMANENT
+            'status' => STATUS_PERMANENT
         ];
 
         // If a configuration key named 'mimetype' exists, use the value of that key as the *source* for retrieving
@@ -307,18 +307,18 @@ class FileImport extends FileCopy {
    * Determines how to handle file conflicts.
    *
    * @return int
-   *   FILE_EXISTS_REPLACE (default), FILE_EXISTS_RENAME, or FILE_EXISTS_ERROR
+   *   EXISTS_REPLACE (default), EXISTS_RENAME, or EXISTS_ERROR
    *   depending on the current configuration.
    */
   protected function getOverwriteMode() {
     if (!empty($this->configuration['rename'])) {
-      return FileSystemInterface::FILE_EXISTS_RENAME;
+      return FileSystemInterface::EXISTS_RENAME;
     }
     if (!empty($this->configuration['reuse'])) {
-      return FileSystemInterface::FILE_EXISTS_ERROR;
+      return FileSystemInterface::EXISTS_ERROR;
     }
 
-    return FileSystemInterface::FILE_EXISTS_REPLACE;
+    return FileSystemInterface::EXISTS_REPLACE;
   }
 
   /**
