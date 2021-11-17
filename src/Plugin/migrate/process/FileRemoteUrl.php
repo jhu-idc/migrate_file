@@ -65,6 +65,10 @@ class FileRemoteUrl extends ProcessPluginBase {
       return NULL;
     }
 
+    if ($uid == -1) {
+      $uid = \Drupal::currentUser()->id();
+    }
+
     // Create a file entity.
     $file = File::create([
       'uri' => $value,

@@ -34,7 +34,8 @@ use GuzzleHttp\Exception\ServerException;
  *   be used to differentiate it from being a filename. If no trailing slash
  *   is provided the path will be assumed to be the destination filename.
  *   Defaults to "public://".
- * - uid: The uid to attribute the file entity to. Defaults to 0
+ * - uid: The uid to attribute the file entity to. -1 tells the code to use the current
+ *   user; Defaults to 0
  * - move: Boolean, if TRUE, move the file, otherwise copy the file. Only
  *   applies if the source file is local. If the source file is remote it will
  *   be copied. Defaults to FALSE.
@@ -175,7 +176,13 @@ class FileImport extends FileCopy {
     // Get our file entity values.
     $source = $value;
     $destination = $this->getPropertyValue($this->configuration['destination'], $row) ?: 'public://';
+
     $uid = $this->getPropertyValue($this->configuration['uid'], $row) ?: 0;
+
+    if ($uid == -1) {
+      $uid = \Drupal::currentUser()->id();
+    }
+
     $id_only = $this->configuration['id_only'];
 
     // If there's no we skip.
