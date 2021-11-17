@@ -179,11 +179,9 @@ class FileImport extends FileCopy {
 
     $uid = $this->getPropertyValue($this->configuration['uid'], $row) ?: 0;
 
-    \Drupal::logger("Migrate File")->info("Originally, uid is $uid");
     if ($uid == -1) {
       $uid = \Drupal::currentUser()->id();
     }
-    \Drupal::logger("Migrate File")->info("Now uid is $uid");
 
     $id_only = $this->configuration['id_only'];
 
