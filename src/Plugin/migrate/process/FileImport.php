@@ -15,6 +15,7 @@ use Symfony\Component\DependencyInjection\ContainerInterface;
 use GuzzleHttp\Exception\ClientException;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\ServerException;
+use Drupal\Core\StreamWrapper\StreamWrapperManager;
 
 /**
  * Imports a file from an local or external source.
@@ -28,12 +29,19 @@ use GuzzleHttp\Exception\ServerException;
  *   'public://bar.txt'.
  *
  * Optional configuration keys:
- * - destination: (recommended) The destination path or URI, example:
- *   '/path/to/bar/' or 'public://foo.txt'. To provide a directory path (to
- *   which the file is saved using its original name), a trailing slash *must*
- *   be used to differentiate it from being a filename. If no trailing slash
- *   is provided the path will be assumed to be the destination filename.
- *   Defaults to "public://".
+ * - destination: (recommended) The destination path or URI to import the file
+ *   to. If no destination is set, it will default to "public://".
+ *   The destination property works like the source in that you can reference
+ *   source or destination properties for its value. This allows you to build
+ *   dynamic destination paths based on source or destination values (see the
+ *   "Dynamic File Path Destinations" section below for an example). However,
+ *   this means if you want to assign a static destination value in your
+ *   migration, you will need to use a constant.
+ *   @see https://www.drupal.org/docs/8/api/migrate-api/migrate-process/constant-values
+ *   To provide a directory path (to which the file is saved using its original
+ *   name), a trailing slash *must* be used to differentiate it from being a
+ *   filename. If no trailing slash is provided the path will be assumed to be
+ *   the destination filename.
  * - uid: The uid to attribute the file entity to. -1 tells the code to use the current
  *   user; Defaults to 0
  * - move: Boolean, if TRUE, move the file, otherwise copy the file. Only
@@ -49,18 +57,25 @@ use GuzzleHttp\Exception\ServerException;
  *   that if you are importing a lot of remote files, this check will greatly
  *   reduce the speed of your import as it requires an http request per file to
  *   check for existence. Defaults to FALSE.
- * - skip_on_error: (optional) Boolean, if TRUE, this field will be skipped
- *   if any error occurs during the file import (including missing source
- *   files). Otherwise, the row will fail with an error. Defaults to FALSE.
- * - id_only: (optional) Boolean, if TRUE, the process will return just the id
- *   instead of a entity reference array. Useful if you want to manage other
- *   sub-fields in your migration (see example below).
- * - mimetype: (optional) The name of the property that contains the name of the file being imported
- * - filemime: (optional) The name of the property that contains the mime type of the file being imported
+ * - source_check_method: The HTTP Request method used to check if he file
+ *   exists when skip_on_missing_source is set. Either HEAD or GET. A HEAD
+ *   request is faster than a GET since the file isn't actually downloaded,
+ *   but not all servers support it. Switch to GET if necessary.
+ * - skip_on_error: Boolean, if TRUE, this field will be skipped if any error
+ *   occurs during the file import (including missing source files). Otherwise,
+ *   the row will fail with an error. Defaults to FALSE.
+ * - guzzle_options: Guzzle options which will be used for requests if the
+ *   source file is a remote file. This will be used for the file check if
+ *   skip_on_missing_source is set, as well as for the file Download itself.
+ *   @see Drupal\migrate\Plugin\migrate\process\Download
+ * - id_only: Boolean, if TRUE, the process will return just the id instead of
+ *   an entity reference array. Useful if you want to manage other sub-fields
+ *   in your migration (see example below).
  *
- * The destination and uid configuration fields support copying destination
- * values. These are indicated by a starting @ sign. Values using @ must be
- * wrapped in quotes. (the same as it works with the 'source' property).
+ * The destination and uid configuration fields support referencing destination
+ * values. These are indicated by a prifixing with the @ character. Values
+ * using @ must be wrapped in quotes. (the same as it works with the 'source'
+ * property).
  *
  * @see Drupal\migrate\Plugin\migrate\process\Get
  *
@@ -118,6 +133,8 @@ use GuzzleHttp\Exception\ServerException;
  *     id_only: true
  *   field_image/alt: image
  *   #
+ *   # Dynamic File Path Destinations:
+ *   #
  *   # Since the destination property can accept a destination value, you can
  *   # create dynamic filepaths. First you create a temporary field (you can
  *   # name this whatever you want as long as it isn't the name of a field on the
@@ -159,7 +176,10 @@ class FileImport extends FileCopy {
       'destination' => NULL,
       'uid' => NULL,
       'skip_on_missing_source' => FALSE,
+      'source_check_method' => 'HEAD',
+      'skip_on_error' => FALSE,
       'id_only' => FALSE,
+      'guzzle_options' => [],
     ];
     parent::__construct($configuration, $plugin_id, $plugin_definition, $stream_wrappers, $file_system, $download_plugin);
   }
@@ -198,17 +218,68 @@ class FileImport extends FileCopy {
 
     // Build the destination file uri (in case only a directory was provided).
     $destination = $this->getDestinationFilePath($source, $destination);
-    if (!$this->streamWrapperManager->getScheme($destination)) {
+    if (!StreamWrapperManager::getScheme($destination)) {
       if (empty($destination)) {
         $destination = \Drupal::config('system.file')->get('default_scheme') . '://' . preg_replace('/^\//' ,'', $destination);
       }
     }
     $final_destination = '';
 
+    \Drupal::logger("file_import")->info("checking for reuse");
+
+    $mode = $this->getOverwriteMode();
+    $localUri = $this->isLocalUri($destination);
+    $isFile = is_file($destination);
+
+    \Drupal::logger('file_import')->info("mode: $mode; localUri? $localUri, isFile? $isFile");
+    \Drupal::logger('file_import')->info("mode: $mode, Error exists: " . FileSystemInterface::EXISTS_ERROR);
+
+    // ********************************************************************************************
+    // iDC Change - bseeger 11/21: This migration code was not intended to be used the way we are using it.
+    // Namely, it does not expect re-ingest of files.
+    // in iDC we need to handle these scenario:
+    //  1) [DONE] new ingest: both the media and file are new
+    //  2) new ingest: the media is new, but the file is being reused
+    //  3) Metadata update: the media is not new and neither is the file
+    //  4) Metadata update and File change: the media is not new, but the file changed.    <---not sure we will cover this.
+    // ********************************************************************************************
+
+
+    // setup the file properties
+    $file_props = [
+          'uri' => '',
+          'uid' => $uid,
+          'status' => FILE_STATUS_PERMANENT
+    ];
+
+    // If a configuration key named 'mimetype' exists, use the value of that key as the *source* for retrieving
+    // the file's mimetype.  Allows for another process plugin to set the mime type of the File entity being
+    // created.
+    if ($this->configuration["mimetype"]) {
+        $source_mime_property = $this->configuration["mimetype"];
+        if ($row->get($source_mime_property)) {
+            $file_props["filemime"] = $row->get($source_mime_property);
+        }
+    }
+
+    // If a configuration key named 'filename' exists, use the value of that key as the *source* for retrieving the
+    // file's name.  Allows for another process plugin to set the filename of the File entity being created.
+    if ($this->configuration["filename"]) {
+        \Drupal::logger("file_import")->info("filename key set to " . $this->configuration["filename"]);
+        $source_filename_property = $this->configuration["filename"];
+        if ($row->get("$source_filename_property")) {
+            \Drupal::logger("file_import")->info("filename value set to " . $row->get("$source_filename_property"));
+            $file_props["filename"] = $row->get("$source_filename_property");
+        }
+    }
+
     // If we're in re-use mode, reuse the file if it exists.
-    if ($this->getOverwriteMode() == FileSystemInterface::EXISTS_ERROR && $this->isLocalUri($destination) && is_file($destination)) {
+    if ($this->getOverwriteMode() == FileSystemInterface::EXISTS_ERROR && is_file($destination)) {
+      \Drupal::logger("file_import")->info("inside first if, looking for: $destination");
       // Look for a file entity with the destination uri.
+
       if ($files = \Drupal::entityTypeManager()->getStorage('file')->loadByProperties(['uri' => $destination])) {
+        \Drupal::logger("file_import")->info("found it!");
         // Grab the first file entity with a matching uri.
         // @todo: Any logic for preference when there are multiple?
         $file = reset($files);
@@ -216,65 +287,59 @@ class FileImport extends FileCopy {
         // This means that the file was probably set to be removed during
         // garbage collection, which we don't want to happen anymore since we're
         // using it.
-        if (!$file->isTemporary()) {
+        if ($file->isTemporary()) {
+          \Drupal::logger("file_import")->info("setting to permanent");
           $file->setPermanent();
           $file->save();
         }
 
+        if (isset($file_props['filemime'])) {
+          $file->setMimeType($file_props['filemime']);
+        }
+
+        if (isset($file_props['filename'])) {
+          $file->setFilename($file_props['filename']);
+        }
+
+        \Drupal::logger("file_import")->info("return id only");
+
+        // done, file will be reused
         return $id_only ? $file->id() : ['target_id' => $file->id()];
       }
       else {
-        $final_destination = $destination;
+        \Drupal::logger("file_import")->info("did not find file");
+        //$final_destination = $destination;
       }
     }
-    else {
-      // The parent method will take care of our download/move/copy/rename.
-      // We just need to final destination to create the file object.
-      try {
-        $final_destination = parent::transform([$source, $destination], $migrate_executable, $row, $destination_property);
+
+    // At this point we are dealing with creating a new file, since if it already
+    // existed and we were reusing it, we would have stopped running this code.
+    \Drupal::logger("file_import")->info("Creating the file");
+    // The parent method will take care of our download/move/copy/rename.
+    // We just need to final destination to create the file object.
+    try {
+      \Drupal::logger("file_import")->info("shipping off work to parent");
+      $final_destination = parent::transform([$source, $destination], $migrate_executable, $row, $destination_property);
+    }
+    catch (MigrateException $e) {
+      // Check if we're skipping on error
+      if ($this->configuration['skip_on_error']) {
+        $migrate_executable->saveMessage("File $source could not be imported to $destination. Operation failed with message: " . $e->getMessage());
+        throw new MigrateSkipProcessException($e->getMessage());
       }
-      catch (MigrateException $e) {
-        // Check if we're skipping on error
-        if ($this->configuration['skip_on_error']) {
-          $migrate_executable->saveMessage("File $source could not be imported to $destination. Operation failed with message: " . $e->getMessage());
-          throw new MigrateSkipProcessException($e->getMessage());
-        }
-        else {
-          // Pass the error back on again.
-          throw new MigrateException($e->getMessage());
-        }
+      else {
+        // Pass the error back on again.
+        throw new MigrateException($e->getMessage());
       }
     }
 
     if ($final_destination) {
-        // Properties of the File entity being created
-        $file_props = [
-            'uri' => $final_destination,
-            'uid' => $uid,
-            'status' => STATUS_PERMANENT
-        ];
+      \Drupal::logger("file_import")->info("final destination if");
+      // Properties of the File entity being created
 
-        // If a configuration key named 'mimetype' exists, use the value of that key as the *source* for retrieving
-        // the file's mimetype.  Allows for another process plugin to set the mime type of the File entity being
-        // created.
-        if ($this->configuration["mimetype"]) {
-            $source_mime_property = $this->configuration["mimetype"];
-            if ($row->get($source_mime_property)) {
-                $file_props["filemime"] = $row->get($source_mime_property);
-            }
-        }
-
-        // If a configuration key named 'filename' exists, use the value of that key as the *source* for retrieving the
-        // file's name.  Allows for another process plugin to set the filename of the File entity being created.
-        if ($this->configuration["filename"]) {
-            $source_filename_property = $this->configuration["filename"];
-            if ($row->get("$source_filename_property")) {
-                $file_props["filename"] = $row->get("$source_filename_property");
-            }
-        }
-
-        // Create a file entity.
-        $file = File::create($file_props);
+      \Drupal::logger("file_import")->info("create and save it");
+      // Create a file entity.
+      $file = File::create($file_props);
       $file->save();
       return $id_only ? $file->id() : ['target_id' => $file->id()];
     }
@@ -314,7 +379,7 @@ class FileImport extends FileCopy {
    * Determines how to handle file conflicts.
    *
    * @return int
-   *   EXISTS_REPLACE (default), EXISTS_RENAME, or EXISTS_ERROR
+   *   FILE_EXISTS_REPLACE (default), FILE_EXISTS_RENAME, or FILE_EXISTS_ERROR
    *   depending on the current configuration.
    */
   protected function getOverwriteMode() {
@@ -356,7 +421,7 @@ class FileImport extends FileCopy {
   protected function getDestinationFilePath($source, $destination) {
     if ($this->isDirectory($destination)) {
       $parsed_url = parse_url($source);
-      $filepath = $destination . $this->fileSystem->basename($parsed_url['path']);
+      $filepath = $destination . \Drupal::service('file_system')->basename($parsed_url['path']);
     }
     else {
       $filepath = $destination;
@@ -373,7 +438,9 @@ class FileImport extends FileCopy {
     }
     else {
       try {
-        \Drupal::httpClient()->head($path);
+        $method = !empty($this->configuration['source_check_method']) ? $this->configuration['source_check_method'] : 'HEAD';
+        $options = !empty($this->configuration['guzzle_options']) ? $this->configuration['guzzle_options'] : [];
+        \Drupal::httpClient()->request($method, $path, $options);
         return TRUE;
       }
       catch (ServerException $e) {
